@@ -1,7 +1,9 @@
 from collections import defaultdict
 from functools import cached_property
+import json
+from pathlib import Path
 import numpy as np
-from brp.libs.indexer import Bucket, Data, Index
+from brp.libs.indexer import Bucket, Data, Hyperplane, Index
 from brp.libs.types import Vector
 
 
@@ -11,15 +13,15 @@ class _BRPModel:
     Attributes:
         num_hyperplanes: The number of hyperplanes that'll be used to build the model.
         bucket_size: The length of the hyperplane's bucket.
-        points: The dataset to fit to the model.
-        hyperplanes: The randomized hyperplanes.
+        index: The index instance.
+        hyperplanes: The random hyperplanes.
     """
 
     def __init__(self, index: Index, num_hyperplanes: int, bucket_size: float) -> None:
         """The model initializer.
 
         Args:
-            points: The dataset to fit to the model.
+            index: The index instance.
             num_hyperplanes: The number of hyperplanes that'll be used to build the model.
             bucket_size: The length of the hyperplane's bucket.
         """
@@ -27,13 +29,19 @@ class _BRPModel:
         self.num_hyperplanes: int = num_hyperplanes
         self.bucket_size: float = bucket_size
         self._index: Index = index
-        self.hyperplanes: list[np.ndarray] | None = None
+        self.hyperplanes: list[Hyperplane] = []
 
     def generate_buckets(self) -> None:
+        """Generate buckets for each data."""
+
+        self._index.clean(Bucket, Hyperplane)
+
         for data in self._index.fetch_all_data():
-            if self.hyperplanes is None:
-                print("Hello")
-                self.hyperplanes = self._gen_random_hyperplanes(len(data.embedding))
+            if not self.hyperplanes:
+                for hyperplane in self._gen_random_hyperplanes(len(data.embedding)):
+                    self.hyperplanes.append(
+                        self._index.create(Hyperplane(vector=tuple(hyperplane)))
+                    )
 
             hash_set: Vector = self._compute_hash_set(data.embedding)
             flattened_hash: int = self._flatten_hashset(hash_set)
@@ -44,19 +52,19 @@ class _BRPModel:
 
     def get_approximate_nearest_neighbors(
         self, query: Vector, k: int = 1
-    ) -> list[tuple[float, Vector]]:
+    ) -> list[tuple[float, str]]:
         """Query for the approximated nearest neighbors from the indexed dataset.
 
         Args:
-            query: The query to compare.
-            k: The k neighbors to return.
+            query: The data's embedding to query.
+            k: The k nearest neighbors to return.
 
         Returns:
-            list[tuple[float, Point]]: The k nearest neighbords of the query.
+            list[tuple[float, str]]: The k nearest neighbords of the query.
         """
 
         hash_index: int = self._flatten_hashset(self._compute_hash_set(query))
-        bucket: Bucket = Bucket(hash=hash_index)
+        bucket: Bucket = self._index.fetch_bucket(hash_index)
         bucket_distances: list[tuple[float, Vector]] = []
 
         for data in self._index.fetch_bucket_data(bucket):
@@ -66,21 +74,11 @@ class _BRPModel:
 
         return sorted(bucket_distances, key=lambda x: x[0])[:k]
 
-    # @cached_property
-    # def hashes(self) -> dict[int, list[Vector]]:
-    #     """Compute the hash set for each point of the dataset.
+    def load_hyperplanes(self) -> None:
+        """Fetch hyperplanes from db and load them into the model instance."""
 
-    #     Returns:
-    #         dict[int, list[Point]]: The hash map which is a pair of
-    #             (<flattened_hashset>, <points>).
-    #     """
-
-    #     hashes: dict[Vector, Vector] = defaultdict(list)
-
-    #     for v in self.dataset:
-    #         hashes[self._flatten_hashset(self._compute_hash_set(v))].append(v)
-
-    #     return hashes
+        self.hyperplanes = list(self._index.fetch_all_hyperplanes())
+        self.num_hyperplanes = len(self.hyperplanes)
 
     def _compute_hash_set(self, v: Vector) -> Vector:
         """Determine the hash set according to the given point.
@@ -94,8 +92,8 @@ class _BRPModel:
 
         v_hashes: Vector = []
 
-        for w in self.hyperplanes:
-            v_hashes.append(self._compute_hash(v, w, self.bucket_size))
+        for hyperplane in self.hyperplanes:
+            v_hashes.append(self._compute_hash(v, hyperplane.vector, self.bucket_size))
 
         return v_hashes
 
@@ -171,11 +169,13 @@ class BucketedRandomProjection:
         self.num_hyperplanes: int = num_hyperplanes
         self.bucket_size: float = bucket_size
 
-    def build_model(self, index: Index, force_init: bool = False) -> _BRPModel:
+    def load_model(self, index: Index, force_init: bool = False) -> _BRPModel:
         """Build the BRP model according to the given points.
 
         Args:
-            points: The dataset to fit to the model.
+            index: The index instance.
+            force_init: A boolean that specify if the model should regenerate
+                random hyperplanes and buckets. Default to False.
 
         Returns:
             _BRPModel: The built BRP model.
@@ -185,5 +185,7 @@ class BucketedRandomProjection:
 
         if force_init:
             model.generate_buckets()
+        else:
+            model.load_hyperplanes()
 
         return model

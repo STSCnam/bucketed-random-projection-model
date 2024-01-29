@@ -7,7 +7,16 @@ from brp.libs.types import Vector
 
 @dataclass
 class _BaseModel:
+    """The base index models."""
+
     def model_fields(self) -> dict[str, Any]:
+        """Get the available model fields.
+        An field is considered available if its init property is True.
+
+        Returns:
+            dict[str, Any]: The model's fields mapping (key, value).
+        """
+
         self_fields: dict[str, Any] = {}
 
         for f_name, f_obj in self.__dataclass_fields__.items():
@@ -17,6 +26,12 @@ class _BaseModel:
         return self_fields
 
     def _prepare_mapping(self) -> dict[str, Any]:
+        """Fit the model's (key, value) mapping to the index model.
+
+        Returns:
+            dict[str, Any]: The transformed model's field mapping.
+        """
+
         field_mapping: dict[str, Any] = {}
 
         for self_name, self_value in self.model_fields().items():
@@ -33,6 +48,13 @@ class _BaseModel:
 
 @dataclass
 class Hyperplane(_BaseModel):
+    """The hyperplane model.
+
+    Attributes:
+        id: The hyperplane's index.
+        vector: The hyperplane point.
+    """
+
     id: int = field(init=False, default=None)
     vector: Vector
 
@@ -43,12 +65,28 @@ class Hyperplane(_BaseModel):
 
 @dataclass
 class Bucket(_BaseModel):
+    """The bucket model.
+
+    Attributes:
+        id: The bucket's index.
+        hash: The bucket's hash.
+    """
+
     id: int = field(init=False, default=None)
     hash: int
 
 
 @dataclass
 class Data(_BaseModel):
+    """The data model.
+
+    Attributes:
+        id: The data's index.
+        raw: The raw information that identify the data (for tests).
+        embedding: The data embedding.
+        bucket: The data's related bucket.
+    """
+
     id: int = field(init=False, default=None)
     raw: Any
     embedding: Vector
@@ -60,14 +98,51 @@ class Data(_BaseModel):
 
 
 class Index:
+    """The index manager class that will create, update and fetch the dataset's index."""
+
     def __init__(self, db_file: Path, *, force_init: bool = False) -> None:
+        """The index initializer.
+
+        Args:
+            db_file: The SQLite3 file that contains the index.
+            force_init (Optional): Force the index creation from scratch.
+                Default to False.
+        """
+
         self._db_conn: sqlite3.Connection = self._init_db(db_file, force_init)
 
     def populate(self, dataset: list[dict[str, Any]]) -> None:
+        """Populate the index from the dataset object.
+
+        Args:
+            dataset: The dataset to import.
+        """
+
         for data in dataset:
             self.create(Data(**data))
 
+    def clean(self, *model_type: type[_BaseModel]) -> None:
+        """Truncate the index tables according to the given model types.
+
+        Args:
+            model_type: The multiple argument of the model types to clean.
+        """
+
+        cursor: sqlite3.Cursor = self._db_conn.cursor()
+
+        for m_type in model_type:
+            cursor.execute(f"DELETE FROM {m_type.__name__.lower()}")
+
+        self._db_conn.commit()
+        cursor.close()
+
     def fetch_all_data(self) -> Iterator[Data]:
+        """Get all data from index.
+
+        Returns:
+            Iterator[Data]: The fetched data iterator.
+        """
+
         for row in self._execute_select(Data.__name__.lower()):
             rel_bucket: Bucket | None = None
             row = dict(row)
@@ -83,6 +158,12 @@ class Index:
             yield data
 
     def fetch_all_hyperplanes(self) -> Iterator[Hyperplane]:
+        """Get all hyperplanes from index.
+
+        Returns:
+            Iterator[Hyperplane]: An iterator of the fetched hyperplanes.
+        """
+
         for row in self._execute_select(Hyperplane.__name__.lower()):
             row = dict(row)
             cached_id: int = row["id"]
@@ -91,10 +172,19 @@ class Index:
             hyperplane.id = cached_id
             yield hyperplane
 
-    def fetch_bucket(self, bucket_id: int) -> Bucket | None:
+    def fetch_bucket(self, hash: int) -> Bucket | None:
+        """Get the bucket from index by the given hash.
+
+        Args:
+            hash: The bucket's hash to fetch.
+
+        Returns:
+            Bucket | None: The fetched bucket if exists, else None.
+        """
+
         row: dict[str, Any] | None = None
 
-        for row in self._execute_select(Bucket.__name__.lower(), id=bucket_id):
+        for row in self._execute_select(Bucket.__name__.lower(), hash=hash):
             row = dict(row)
             break
 
@@ -105,7 +195,47 @@ class Index:
             bucket.id = cached_id
             return bucket
 
+    def fetch_data(self, raw: str) -> Data | None:
+        """Get the data from index by its identifier.
+        The data if returned with its related bucket if exists.
+
+        Args:
+            raw: The data identifier.
+
+        Returns:
+            Data | None: The fetched data, else None.
+        """
+
+        row: dict[str, Any] | None = None
+
+        for row in self._execute_select(Data.__name__.lower(), raw=raw):
+            row = dict(row)
+            break
+
+        if row:
+            rel_bucket: Bucket | None = None
+            row = dict(row)
+            cached_id: int = row["id"]
+
+            if row["bucket_id"] is not None:
+                rel_bucket = self.fetch_bucket(row["bucket_id"])
+
+            del row["id"], row["bucket_id"]
+            data: Data = Data(**row)
+            data.id = cached_id
+            data.bucket = rel_bucket
+            return data
+
     def fetch_bucket_data(self, bucket: Bucket) -> Iterator[Data]:
+        """Get the data set related to the given bucket.
+
+        Args:
+            bucket: The bucket model that contains its related data set.
+
+        Returns:
+            Iterator[Data]: The bucket's related data set if any.
+        """
+
         if bucket.id is None:
             raise PermissionError("Cannot get bucket's data if it not exists.")
 
@@ -118,7 +248,19 @@ class Index:
             data.id = cached_id
             yield data
 
-    def update(self, model: _BaseModel) -> _BaseModel | None:
+    def update(self, model: _BaseModel) -> _BaseModel:
+        """Update index.
+
+        Args:
+            model: The Data or Bucket model to update.
+
+        Raises:
+            TypeError: If the given model is not one of (Data, Bucket) objects.
+
+        Returns:
+            _BaseModel | None: The updated data.
+        """
+
         if isinstance(model, Data):
             return self._update_data(model)
         elif isinstance(model, Bucket):
@@ -129,6 +271,15 @@ class Index:
             )
 
     def create(self, model: _BaseModel) -> _BaseModel | None:
+        """Create an entry to the index according to the given model.
+
+        Args:
+            model: The model to create.
+
+        Returns:
+            _BaseModel | None: The created model if any.
+        """
+
         if isinstance(model, Data):
             return self._create_data(model)
         elif isinstance(model, Bucket):
@@ -138,7 +289,7 @@ class Index:
 
     def _create_hyperplane(self, model: Hyperplane) -> Hyperplane:
         f_mapping: dict[str, Any] = model._prepare_mapping()
-        self._execute_update(model.__class__.__name__.lower(), model.id, **f_mapping)
+        self._execute_insert(model.__class__.__name__.lower(), **f_mapping)
         return model
 
     def _update_data(self, model: Data) -> Data:
@@ -165,6 +316,9 @@ class Index:
         return model
 
     def _create_bucket(self, model: Bucket) -> Bucket:
+        if fetched_model := self.fetch_bucket(model.hash):
+            return fetched_model
+
         f_mapping: dict[str, Any] = model._prepare_mapping()
         model.id = self._execute_insert(model.__class__.__name__.lower(), **f_mapping)
         return model
