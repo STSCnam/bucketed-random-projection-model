@@ -1,7 +1,8 @@
 from collections import defaultdict
 from functools import cached_property
 import numpy as np
-from brp.libs.types import Vector, Vector
+from brp.libs.indexer import Bucket, Data, Index
+from brp.libs.types import Vector
 
 
 class _BRPModel:
@@ -14,9 +15,7 @@ class _BRPModel:
         hyperplanes: The randomized hyperplanes.
     """
 
-    def __init__(
-        self, dataset: list[Vector], num_hyperplanes: int, bucket_size: float
-    ) -> None:
+    def __init__(self, index: Index, num_hyperplanes: int, bucket_size: float) -> None:
         """The model initializer.
 
         Args:
@@ -27,10 +26,21 @@ class _BRPModel:
 
         self.num_hyperplanes: int = num_hyperplanes
         self.bucket_size: float = bucket_size
-        self.dataset: list[Vector] = dataset
-        self.hyperplanes: list[np.ndarray] = self._gen_random_hyperplanes(
-            len(dataset[0])
-        )
+        self._index: Index = index
+        self.hyperplanes: list[np.ndarray] | None = None
+
+    def generate_buckets(self) -> None:
+        for data in self._index.fetch_all_data():
+            if self.hyperplanes is None:
+                print("Hello")
+                self.hyperplanes = self._gen_random_hyperplanes(len(data.embedding))
+
+            hash_set: Vector = self._compute_hash_set(data.embedding)
+            flattened_hash: int = self._flatten_hashset(hash_set)
+            bucket: Bucket = Bucket(hash=flattened_hash)
+            bucket = self._index.create(bucket)
+            data.bucket = bucket
+            self._index.update(data)
 
     def get_approximate_nearest_neighbors(
         self, query: Vector, k: int = 1
@@ -46,28 +56,31 @@ class _BRPModel:
         """
 
         hash_index: int = self._flatten_hashset(self._compute_hash_set(query))
+        bucket: Bucket = Bucket(hash=hash_index)
         bucket_distances: list[tuple[float, Vector]] = []
 
-        for v in self.hashes.get(hash_index, []):
-            bucket_distances.append((np.linalg.norm(np.array(query) - np.array(v)), v))
+        for data in self._index.fetch_bucket_data(bucket):
+            v: np.array = np.array(data.embedding)
+            qv: np.array = np.array(query)
+            bucket_distances.append((np.linalg.norm(qv - v), data.raw))
 
         return sorted(bucket_distances, key=lambda x: x[0])[:k]
 
-    @cached_property
-    def hashes(self) -> dict[int, list[Vector]]:
-        """Compute the hash set for each point of the dataset.
+    # @cached_property
+    # def hashes(self) -> dict[int, list[Vector]]:
+    #     """Compute the hash set for each point of the dataset.
 
-        Returns:
-            dict[int, list[Point]]: The hash map which is a pair of
-                (<flattened_hashset>, <points>).
-        """
+    #     Returns:
+    #         dict[int, list[Point]]: The hash map which is a pair of
+    #             (<flattened_hashset>, <points>).
+    #     """
 
-        hashes: dict[Vector, Vector] = defaultdict(list)
+    #     hashes: dict[Vector, Vector] = defaultdict(list)
 
-        for v in self.dataset:
-            hashes[self._flatten_hashset(self._compute_hash_set(v))].append(v)
+    #     for v in self.dataset:
+    #         hashes[self._flatten_hashset(self._compute_hash_set(v))].append(v)
 
-        return hashes
+    #     return hashes
 
     def _compute_hash_set(self, v: Vector) -> Vector:
         """Determine the hash set according to the given point.
@@ -158,7 +171,7 @@ class BucketedRandomProjection:
         self.num_hyperplanes: int = num_hyperplanes
         self.bucket_size: float = bucket_size
 
-    def build_model(self, dataset: list[Vector]) -> _BRPModel:
+    def build_model(self, index: Index, force_init: bool = False) -> _BRPModel:
         """Build the BRP model according to the given points.
 
         Args:
@@ -168,5 +181,9 @@ class BucketedRandomProjection:
             _BRPModel: The built BRP model.
         """
 
-        model: _BRPModel = _BRPModel(dataset, self.num_hyperplanes, self.bucket_size)
+        model: _BRPModel = _BRPModel(index, self.num_hyperplanes, self.bucket_size)
+
+        if force_init:
+            model.generate_buckets()
+
         return model
