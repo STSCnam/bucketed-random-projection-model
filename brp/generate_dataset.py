@@ -5,11 +5,11 @@ from brp.libs.datagen import DatasetGenerator
 
 class Main:
     @classmethod
-    def run(cls, ds_size: int, n: int) -> None:
+    def run(cls, size: int, n: int) -> None:
         output_dir: Path = Path("datasets")
         print("Generating dataset...")
         DatasetGenerator.generate(
-            output_dir, dataset_size=ds_size, dims=n, dim_range=(-10, 20)
+            output_dir, n=n, a=-50.0, b=50.0, size=size, num_clusters=3
         )
 
 

@@ -16,9 +16,11 @@ class DatasetGenerator:
         cls,
         output_dir: Path,
         *,
-        dataset_size: int = 1000,
-        dims: int = 100,
-        dim_range: tuple[int, int] = (-5, 5)
+        n: int = 100,
+        a: float = -5.0,
+        b: float = 5.0,
+        size: int = 1000,
+        num_clusters: int = 5
     ) -> None:
         """Generate a random dataset according to the given specificities.
         Each embedding will be distributed basing of the Gaussian distribution to create
@@ -31,18 +33,23 @@ class DatasetGenerator:
             dim_range (Optional): The range of each axes to distribute the data embeddings.
         """
 
-        n = math.ceil(math.log(dataset_size, 26))
+        n = math.ceil(math.log(size, 26))
         data_file: Path = output_dir / "rand_dataset.json"
         data_file.unlink(missing_ok=True)
         dataset: list[dict[str, Any]] = []
+        points_per_cluster: int = int(size / num_clusters)
+        sigma: float = (abs(a) + abs(b)) / 10
 
-        for i, identifier in enumerate(cls._iter_identifiers(n), 1):
+        for i, identifier in enumerate(cls._iter_identifiers(n)):
+            if i % points_per_cluster == 0:
+                axePositions: list[float] = list(np.random.uniform(a, b, size=n))
+
             embedding: tuple[float, ...] = cls._generate_random_embedding(
-                dims, dim_range
+                n, sigma, axePositions
             )
             dataset.append({"raw": identifier, "embedding": embedding})
 
-            if i >= dataset_size:
+            if i >= size - 1:
                 break
 
         data_file.write_text(json.dumps(dataset))
@@ -66,14 +73,16 @@ class DatasetGenerator:
 
     @classmethod
     def _generate_random_embedding(
-        cls, n: int, dim_range: tuple[int, int]
+        cls, n: int, sigma: float, axePositions: list[float]
     ) -> tuple[float, ...]:
         """Generates a random embedding using the normal distribution to promote
         clusters.
 
         Args:
             n: The vector's dimension.
-            dim_range: The range of each axe of the vector.
+            sigma: The standard deviation from mu for the normal distribution standard.
+            axePositions: The random axe values from space to distribute each vector's
+                axe.
 
         Returns:
             tuple[float]: The generated vector.
@@ -81,9 +90,9 @@ class DatasetGenerator:
 
         embedding: list[float] = []
 
-        for _ in range(n):
+        for i in range(n):
             embedding.append(
-                np.random.normal(loc=random.choice(dim_range), scale=2, size=1)[0]
+                np.random.normal(loc=axePositions[i], scale=sigma, size=1)[0]
             )
 
         return tuple(embedding)
