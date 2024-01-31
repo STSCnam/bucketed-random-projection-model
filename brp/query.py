@@ -10,9 +10,7 @@ class Main:
     def run(cls, bucket_size: float, k: int, identifier: str) -> None:
         db_file: Path = Path(".databases/.index.sqlite3")
         index: Index = Index(db_file, force_init=False)
-        brp: BucketedRandomProjection = BucketedRandomProjection(
-            bucket_size=bucket_size
-        )
+        brp: BucketedRandomProjection = BucketedRandomProjection(bucket_size=bucket_size)
         model: _BRPModel = brp.load_model(index, force_init=False)
         query: Data | None = index.fetch_data(identifier)
 

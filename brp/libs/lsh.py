@@ -43,9 +43,6 @@ class _BRPModel:
                         self._index.create(Hyperplane(vector=tuple(hyperplane)))
                     )
 
-            Path("datasets/hyperplanes.json").write_text(
-                json.dumps([h.vector for h in self.hyperplanes]), encoding="utf-8"
-            )
             hash_set: Vector = self._compute_hash_set(data.embedding)
             flattened_hash: int = self._flatten_hashset(hash_set)
             bucket: Bucket = Bucket(hash=flattened_hash)
